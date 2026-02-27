@@ -8,3 +8,6 @@ python3 scripts/run_demo.py \
   --ckpt_dir ./pretrained_models/23-51-11/model_best_bp2-001.pth \
   --out_dir ./test_outputs/
 
+跑在线话题图片png，实时跑，实时显示图像和深度图：
+python3 scripts/run_demo_ros2_stream.py   --ckpt_dir ./pretrained_models/23-51-11/model_best_bp2-001.pth   --intrinsic_file "./assets/K.txt"   --out_dir ./test_outputs_stream   --left_topic /image_left_raw/nv12_quarter_hengfortwoCamera2depthimage   --right_topic /image_right_raw/nv12_quarter_hengfortwoCamera2depthimage
+
