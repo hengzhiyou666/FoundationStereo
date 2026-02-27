@@ -93,6 +93,9 @@ class StereoInferenceNode(Node):
       RosImage, self.right_topic, self._right_cb, 10
     )
 
+    # 深度图发布器，话题名与 ego-planner-swarm 中 pcl_render_node.cpp 对齐为 "depth"
+    self.depth_pub = self.create_publisher(RosImage, "depth", 10)
+
     self.get_logger().info(
       f"StereoInferenceNode started. Subscribing to:\n"
       f"  left : {self.left_topic}\n"
@@ -201,6 +204,21 @@ class StereoInferenceNode(Node):
       depth = K[0, 0] * self.baseline / disp
       np.save(os.path.join(self.args.out_dir, "depth_meter.npy"), depth)
 
+      # 发布给 ego-planner 使用的深度图像（32FC1, 单位: 米）
+      try:
+        depth_msg = RosImage()
+        depth_msg.header.stamp = self.last_stamp or self.get_clock().now().to_msg()
+        depth_msg.header.frame_id = "camera"
+        depth_msg.height = H
+        depth_msg.width = W
+        depth_msg.encoding = "32FC1"
+        depth_msg.is_bigendian = False
+        depth_msg.step = W * 4  # float32
+        depth_msg.data = depth.astype(np.float32).tobytes()
+        self.depth_pub.publish(depth_msg)
+      except Exception as e:
+        logging.warning(f"Failed to publish depth image: {e}")
+
       if self.args.save_pc:
         xyz_map = depth2xyzmap(depth, K)
         pcd = toOpen3dCloud(xyz_map.reshape(-1, 3), img0_ori.reshape(-1, 3))
@@ -263,8 +281,8 @@ def main():
   parser.add_argument(
     "--get_pc",
     type=int,
-    default=0,
-    help="为 1 时读内参、算深度并保存 depth_meter.npy（流式模式下按需使用）",
+    default=1,
+    help="为 1 时读内参、算深度并保存 depth_meter.npy，并发布深度图到 depth 话题",
   )
   parser.add_argument(
     "--save_pc",
