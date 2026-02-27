@@ -16,12 +16,94 @@ import cv2
 import numpy as np
 import open3d as o3d
 import time
+from typing import Optional, Tuple
+
+try:
+  import rclpy
+  from rclpy.node import Node
+  from sensor_msgs.msg import Image as RosImage
+  _ROS2_AVAILABLE = True
+except ImportError:
+  _ROS2_AVAILABLE = False
+
 code_dir = os.path.dirname(os.path.realpath(__file__))
 sys.path.append(f'{code_dir}/../')
 from omegaconf import OmegaConf
 from core.utils.utils import InputPadder
 from Utils import set_logging_format, set_seed, vis_disparity, depth2xyzmap, toOpen3dCloud
 from core.foundation_stereo import FoundationStereo
+
+
+def _rosimg_to_bgr(img_msg: RosImage) -> np.ndarray:
+  """
+  将 ROS2 Image 消息转换为 BGR numpy 图像。
+  假设编码是 bgr8 或 rgb8 或 mono8（灰度）。
+  """
+  h, w = img_msg.height, img_msg.width
+  data = np.frombuffer(img_msg.data, dtype=np.uint8)
+
+  # mono8
+  if img_msg.encoding.lower() in ["mono8", "8uc1"]:
+    img = data.reshape(h, w, 1)
+    img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
+    return img
+
+  # bgr8 / rgb8
+  img = data.reshape(h, w, -1)
+  if img_msg.encoding.lower() in ["rgb8", "rgb"]:
+    img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
+  # 如果已经是 bgr8，就直接返回
+  return img
+
+
+class _StereoImageSubscriber(Node):
+  """简单订阅器：各收一帧左右图后退出。"""
+
+  def __init__(self, left_topic: str, right_topic: str):
+    super().__init__('foundation_stereo_input_node')
+    self._left: Optional[np.ndarray] = None
+    self._right: Optional[np.ndarray] = None
+    self._left_sub = self.create_subscription(RosImage, left_topic, self._left_cb, 10)
+    self._right_sub = self.create_subscription(RosImage, right_topic, self._right_cb, 10)
+
+  def _left_cb(self, msg: RosImage):
+    try:
+      self._left = _rosimg_to_bgr(msg)
+    except Exception as e:
+      self.get_logger().error(f"左目图像解析失败: {e}")
+
+  def _right_cb(self, msg: RosImage):
+    try:
+      self._right = _rosimg_to_bgr(msg)
+    except Exception as e:
+      self.get_logger().error(f"右目图像解析失败: {e}")
+
+  def get_pair(self, timeout: float) -> Tuple[np.ndarray, np.ndarray]:
+    start = time.time()
+    while (self._left is None or self._right is None) and (time.time() - start) < timeout:
+      rclpy.spin_once(self, timeout_sec=0.1)
+    if self._left is None or self._right is None:
+      raise TimeoutError("在指定超时时间内没有同时收到左右图像。")
+    return self._left, self._right
+
+
+def get_input_images(args) -> Tuple[np.ndarray, np.ndarray]:
+  """根据参数选择从文件或 ROS2 读取一对图像。"""
+  if getattr(args, "use_ros2", False):
+    if not _ROS2_AVAILABLE:
+      raise RuntimeError("检测到 use_ros2=1，但当前 Python 环境没有安装 rclpy / sensor_msgs。请在 ROS2 Humble 环境中运行。")
+    rclpy.init(args=None)
+    try:
+      node = _StereoImageSubscriber(args.left_topic, args.right_topic)
+      img0, img1 = node.get_pair(args.ros2_timeout)
+    finally:
+      rclpy.shutdown()
+    return img0, img1
+
+  # 默认：从文件读取
+  img0 = imageio.imread(args.left_file)
+  img1 = imageio.imread(args.right_file)
+  return img0, img1
 
 
 if __name__=="__main__":
@@ -41,6 +123,15 @@ if __name__=="__main__":
   parser.add_argument('--denoise_cloud', type=int, default=1, help='whether to denoise the point cloud')
   parser.add_argument('--denoise_nb_points', type=int, default=30, help='number of points to consider for radius outlier removal')
   parser.add_argument('--denoise_radius', type=float, default=0.03, help='radius to use for outlier removal')
+  parser.add_argument('--use_ros2', action='store_true', help='是否从 ROS2 话题读取图像而不是从文件读取')
+  parser.add_argument('--left_topic', type=str,
+                      default='/image_left_raw/nv12_quarter_hengfortwoCamera2depthimage',
+                      help='左目图像话题名 (NV12)')
+  parser.add_argument('--right_topic', type=str,
+                      default='/image_right_raw/nv12_quarter_hengfortwoCamera2depthimage',
+                      help='右目图像话题名 (NV12)')
+  parser.add_argument('--ros2_timeout', type=float, default=5.0,
+                      help='等待一对左右图像的超时时间 (秒)')
   args = parser.parse_args()
 
   set_logging_format()
@@ -68,8 +159,7 @@ if __name__=="__main__":
   model.eval()
 
   code_dir = os.path.dirname(os.path.realpath(__file__))
-  img0 = imageio.imread(args.left_file)
-  img1 = imageio.imread(args.right_file)
+  img0, img1 = get_input_images(args)
   # 如果是带 alpha 通道的 RGBA 图像，裁掉 alpha，只保留前 3 个通道 (RGB)
   if img0.ndim == 3 and img0.shape[2] == 4:
     img0 = img0[..., :3]
