@@ -1,0 +1,10 @@
+跑本地图片png：
+python3 scripts/run_demo.py --left_file ./assets/left.png --right_file ./assets/right.png --ckpt_dir ./pretrained_models/23-51-11/model_best_bp2-001.pth --out_dir ./test_outputs/.
+
+
+跑在线话题图片png：
+python3 scripts/run_demo.py \
+  --use_ros2 \
+  --ckpt_dir ./pretrained_models/23-51-11/model_best_bp2-001.pth \
+  --out_dir ./test_outputs/
+
