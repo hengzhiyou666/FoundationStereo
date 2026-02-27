@@ -134,6 +134,7 @@ if __name__=="__main__":
   parser.add_argument('--ros2_timeout', type=float, default=5.0,
                       help='等待一对左右图像的超时时间 (秒)')
   parser.add_argument('--no_show_pc', action='store_true', help='save_pc=1 时不弹出 Open3D 点云窗口，仅保存 ply 文件')
+  parser.add_argument('--show_vis', type=int, default=1, help='为 1 时在推理结束后用窗口显示 vis.png')
   args = parser.parse_args()
 
   set_logging_format()
@@ -204,6 +205,14 @@ if __name__=="__main__":
   vis = np.concatenate([img0_ori, vis], axis=1)
   imageio.imwrite(f'{args.out_dir}/vis.png', vis)
   logging.info(f"Output saved to {args.out_dir}")
+
+  if args.show_vis:
+    try:
+      cv2.imshow("FoundationStereo vis", cv2.cvtColor(vis, cv2.COLOR_RGB2BGR))
+      cv2.waitKey(0)
+      cv2.destroyAllWindows()
+    except Exception as e:
+      logging.warning(f"Failed to show vis window: {e}")
 
   if args.remove_invisible:
     yy,xx = np.meshgrid(np.arange(disp.shape[0]), np.arange(disp.shape[1]), indexing='ij')
