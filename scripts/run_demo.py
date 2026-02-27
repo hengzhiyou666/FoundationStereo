@@ -118,7 +118,8 @@ if __name__=="__main__":
   parser.add_argument('--hiera', default=0, type=int, help='hierarchical inference (only needed for high-resolution images (>1K))')
   parser.add_argument('--z_far', default=10, type=float, help='max depth to clip in point cloud')
   parser.add_argument('--valid_iters', type=int, default=32, help='number of flow-field updates during forward pass')
-  parser.add_argument('--get_pc', type=int, default=1, help='save point cloud output')
+  parser.add_argument('--get_pc', type=int, default=1, help='为 1 时读内参、算深度并保存 depth_meter.npy')
+  parser.add_argument('--save_pc', type=int, default=0, help='为 1 时才生成并保存 cloud.ply、cloud_denoise.ply 及点云窗口（需 get_pc=1）')
   parser.add_argument('--remove_invisible', default=1, type=int, help='remove non-overlapping observations between left and right images from point cloud, so the remaining points are more reliable')
   parser.add_argument('--denoise_cloud', type=int, default=1, help='whether to denoise the point cloud')
   parser.add_argument('--denoise_nb_points', type=int, default=30, help='number of points to consider for radius outlier removal')
@@ -132,6 +133,7 @@ if __name__=="__main__":
                       help='右目图像话题名 (NV12)')
   parser.add_argument('--ros2_timeout', type=float, default=5.0,
                       help='等待一对左右图像的超时时间 (秒)')
+  parser.add_argument('--no_show_pc', action='store_true', help='save_pc=1 时不弹出 Open3D 点云窗口，仅保存 ply 文件')
   args = parser.parse_args()
 
   set_logging_format()
@@ -217,27 +219,33 @@ if __name__=="__main__":
     K[:2] *= scale
     depth = K[0,0]*baseline/disp
     np.save(f'{args.out_dir}/depth_meter.npy', depth)
-    xyz_map = depth2xyzmap(depth, K)
-    pcd = toOpen3dCloud(xyz_map.reshape(-1,3), img0_ori.reshape(-1,3))
-    keep_mask = (np.asarray(pcd.points)[:,2]>0) & (np.asarray(pcd.points)[:,2]<=args.z_far)
-    keep_ids = np.arange(len(np.asarray(pcd.points)))[keep_mask]
-    pcd = pcd.select_by_index(keep_ids)
-    o3d.io.write_point_cloud(f'{args.out_dir}/cloud.ply', pcd)
-    logging.info(f"PCL saved to {args.out_dir}")
+    logging.info(f"depth_meter.npy saved to {args.out_dir}")
 
-    if args.denoise_cloud:
-      logging.info("[Optional step] denoise point cloud...")
-      cl, ind = pcd.remove_radius_outlier(nb_points=args.denoise_nb_points, radius=args.denoise_radius)
-      inlier_cloud = pcd.select_by_index(ind)
-      o3d.io.write_point_cloud(f'{args.out_dir}/cloud_denoise.ply', inlier_cloud)
-      pcd = inlier_cloud
+    if args.save_pc:
+      xyz_map = depth2xyzmap(depth, K)
+      pcd = toOpen3dCloud(xyz_map.reshape(-1,3), img0_ori.reshape(-1,3))
+      keep_mask = (np.asarray(pcd.points)[:,2]>0) & (np.asarray(pcd.points)[:,2]<=args.z_far)
+      keep_ids = np.arange(len(np.asarray(pcd.points)))[keep_mask]
+      pcd = pcd.select_by_index(keep_ids)
+      o3d.io.write_point_cloud(f'{args.out_dir}/cloud.ply', pcd)
+      logging.info(f"PCL saved to {args.out_dir}")
 
-    logging.info("Visualizing point cloud. Press ESC to exit.")
-    vis = o3d.visualization.Visualizer()
-    vis.create_window()
-    vis.add_geometry(pcd)
-    vis.get_render_option().point_size = 1.0
-    vis.get_render_option().background_color = np.array([0.5, 0.5, 0.5])
-    vis.run()
-    vis.destroy_window()
+      if args.denoise_cloud:
+        logging.info("[Optional step] denoise point cloud...")
+        cl, ind = pcd.remove_radius_outlier(nb_points=args.denoise_nb_points, radius=args.denoise_radius)
+        inlier_cloud = pcd.select_by_index(ind)
+        o3d.io.write_point_cloud(f'{args.out_dir}/cloud_denoise.ply', inlier_cloud)
+        pcd = inlier_cloud
+
+      if not args.no_show_pc:
+        logging.info("Visualizing point cloud. Press ESC to exit.")
+        vis = o3d.visualization.Visualizer()
+        vis.create_window()
+        vis.add_geometry(pcd)
+        vis.get_render_option().point_size = 1.0
+        vis.get_render_option().background_color = np.array([0.5, 0.5, 0.5])
+        vis.run()
+        vis.destroy_window()
+      else:
+        logging.info("已关闭 Open3D 点云显示，点云已保存至 %s", args.out_dir)
 
