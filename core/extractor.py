@@ -325,7 +325,7 @@ class Feature(nn.Module):
     def __init__(self, args):
         super(Feature, self).__init__()
         self.args = args
-        model = timm.create_model('edgenext_small', pretrained=True, features_only=False)
+        model = timm.create_model('edgenext_small', pretrained=False, features_only=False)
         self.stem = model.stem
         self.stages = model.stages
         chans = [48, 96, 160, 304]

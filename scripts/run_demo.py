@@ -15,6 +15,7 @@ import logging
 import cv2
 import numpy as np
 import open3d as o3d
+import time
 code_dir = os.path.dirname(os.path.realpath(__file__))
 sys.path.append(f'{code_dir}/../')
 from omegaconf import OmegaConf
@@ -59,7 +60,7 @@ if __name__=="__main__":
 
   model = FoundationStereo(args)
 
-  ckpt = torch.load(ckpt_dir)
+  ckpt = torch.load(ckpt_dir, weights_only=False)
   logging.info(f"ckpt global_step:{ckpt['global_step']}, epoch:{ckpt['epoch']}")
   model.load_state_dict(ckpt['model'])
 
@@ -69,6 +70,11 @@ if __name__=="__main__":
   code_dir = os.path.dirname(os.path.realpath(__file__))
   img0 = imageio.imread(args.left_file)
   img1 = imageio.imread(args.right_file)
+  # 如果是带 alpha 通道的 RGBA 图像，裁掉 alpha，只保留前 3 个通道 (RGB)
+  if img0.ndim == 3 and img0.shape[2] == 4:
+    img0 = img0[..., :3]
+  if img1.ndim == 3 and img1.shape[2] == 4:
+    img1 = img1[..., :3]
   scale = args.scale
   assert scale<=1, "scale must be <=1"
   img0 = cv2.resize(img0, fx=scale, fy=scale, dsize=None)
@@ -82,11 +88,24 @@ if __name__=="__main__":
   padder = InputPadder(img0.shape, divis_by=32, force_square=False)
   img0, img1 = padder.pad(img0, img1)
 
+  # 只统计一次前向推理（从输入张量到视差）的时间
+  # CUDA 是异步的，这里用 synchronize() 确保计时精准
+  if torch.cuda.is_available():
+    torch.cuda.synchronize()
+  start_time = time.time()
   with torch.cuda.amp.autocast(True):
     if not args.hiera:
       disp = model.forward(img0, img1, iters=args.valid_iters, test_mode=True)
     else:
       disp = model.run_hierachical(img0, img1, iters=args.valid_iters, test_mode=True, small_ratio=0.5)
+  if torch.cuda.is_available():
+    torch.cuda.synchronize()
+  infer_time = time.time() - start_time
+  # 同时用 logging 和 print 打印，用明显的分隔符方便在终端中快速看到
+  logging.info(f"Inference time (stereo depth only): {infer_time:.3f} s")
+  print("\n" + "="*70)
+  print(f"[FoundationStereo] Inference time (stereo depth only): {infer_time:.3f} s")
+  print("="*70 + "\n")
   disp = padder.unpad(disp.float())
   disp = disp.data.cpu().numpy().reshape(H,W)
   vis = vis_disparity(disp)
