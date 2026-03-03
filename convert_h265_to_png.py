@@ -15,6 +15,11 @@ class StereoH265ToPngNode(Node):
     def __init__(self):
         super().__init__('stereo_h265_to_png_node')
 
+        # 控制是否保存 PNG 到本地：0/False 不保存，1/True 保存
+        self.save_png = bool(
+            self.declare_parameter('save_png', 0).get_parameter_value().integer_value
+        )
+
         # 根据实际话题名修改
         self.right_topic = '/image_right_raw/h265'
         self.left_topic = '/image_left_raw/h265'
@@ -33,8 +38,9 @@ class StereoH265ToPngNode(Node):
         )
         self.codec_right = av.CodecContext.create('hevc', 'r')
         self.out_right = 'frames_right_png'
-        os.makedirs(self.out_right, exist_ok=True)
         self.idx_right = 0
+        if self.save_png:
+            os.makedirs(self.out_right, exist_ok=True)
 
         # 左相机订阅 & 解码器
         self.sub_left = self.create_subscription(
@@ -50,13 +56,18 @@ class StereoH265ToPngNode(Node):
         )
         self.codec_left = av.CodecContext.create('hevc', 'r')
         self.out_left = 'frames_left_png'
-        os.makedirs(self.out_left, exist_ok=True)
         self.idx_left = 0
+        if self.save_png:
+            os.makedirs(self.out_left, exist_ok=True)
 
         self.bridge = CvBridge()
 
         self.get_logger().info(
             f'Subscribe right={self.right_topic}, left={self.left_topic}, format="h265"'
+        )
+        self.get_logger().info(
+            f'save_png={"ON" if self.save_png else "OFF"} '
+            '(configured by ROS2 param "save_png", 0/1)'
         )
 
     def decode_and_save(self, msg: CompressedVideo, codec_ctx: av.codec.context.CodecContext,
@@ -73,9 +84,6 @@ class StereoH265ToPngNode(Node):
         except av.AVError as e:
             self.get_logger().error(f'FFmpeg decode error: {e}')
             return
-
-        # 通过属性名存取左右各自的计数器
-        idx = getattr(self, idx_ref_name)
 
         for frame in frames:
             # 转成 OpenCV BGR 图像，先发布到 ROS2 话题，再保存 PNG
@@ -94,20 +102,23 @@ class StereoH265ToPngNode(Node):
             )
 
             publisher.publish(img_msg)
+            # 可选：保存 PNG 到本地（由参数 save_png 控制）
+            if self.save_png:
+                # 通过属性名存取左右各自的计数器
+                idx = getattr(self, idx_ref_name)
 
-            # 同时也保存 PNG 到磁盘
-            img = PilImage.fromarray(cv_image[:, :, ::-1])  # BGR -> RGB
-            t_sec = msg.timestamp.sec
-            t_nsec = msg.timestamp.nanosec
-            filename = os.path.join(
-                out_dir,
-                f'{t_sec}_{t_nsec}_{idx:06d}.png'
-            )
-            img.save(filename)
-            self.get_logger().info(f'Saved {filename}')
-            idx += 1
+                img = PilImage.fromarray(cv_image[:, :, ::-1])  # BGR -> RGB
+                t_sec = msg.timestamp.sec
+                t_nsec = msg.timestamp.nanosec
+                filename = os.path.join(
+                    out_dir,
+                    f'{t_sec}_{t_nsec}_{idx:06d}.png'
+                )
+                img.save(filename)
+                self.get_logger().info(f'Saved {filename}')
+                idx += 1
 
-        setattr(self, idx_ref_name, idx)
+                setattr(self, idx_ref_name, idx)
 
     def right_callback(self, msg: CompressedVideo):
         self.decode_and_save(
